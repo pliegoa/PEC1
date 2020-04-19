@@ -2,7 +2,9 @@
 title: "Omics"
 author: "Alicia PLiego"
 date: "4/19/2020"
-output: html_document
+output:
+  pdf_document: default
+  html_document: default
 ---
 
 ## Análisis del estudio GSE110223.
@@ -29,7 +31,7 @@ Para el análisis de expresión génica se ha utilizado el software R (R version
 
 ##### Workflow:
 
-El código completo para replicar este análisis se puede descargar en el repositorio de github creados para desarrollar específicamente esta prueba. La URL es: https://github.com/apliego94
+El código completo para replicar este análisis se puede descargar en el repositorio de github creados para desarrollar específicamente esta prueba. La URL es: https://github.com/pliegoa/PEC1
 
 Paquetes para la ejecución.
 
