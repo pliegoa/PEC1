@@ -1,0 +1,586 @@
+---
+title: "Omics"
+author: "Alicia PLiego"
+date: "4/19/2020"
+output: html_document
+---
+
+## Análisis del estudio GSE110223.
+## Expression data from 13 patients with colorectal cancer
+
+
+#### Abstract.
+
+El Cancer de colon es una enfermedad heterogénea, con variabilidad molecular patogética, que involucra direferentes alteraciones genómicas y epigenómicas. A pesar de los avances en el diagnóstico y tratamiento del cáncer de colon, todavía esta enfermedad es una de las mayores causas de mortalidad y morbilidad, especialmente en países de Europa y América, como también en Nueva Zelanda y Australia. La posibilidad hoy en día de analizar la expresión génica derivada de diferentes planos (molecular y clínico), ayudará a resolver los problemas de heterogeneidad de esta enfermedad y ayudará a mejorar la estratificación de la enfermedad.
+
+
+
+#### Objectives.
+
+Usar microarrays para monitorizar las alteraciones globales en la expresión génica de los adenocarcinomas primarios y compararlas con la expresión de tejido sano en cada paciente, con el fin de conocer los procesos biológicos que están involucrados en la progresión de cancer de colon.
+
+
+#### Materials and methods.
+
+Para realizar este estudio se utilizaron muestras obtenidas de 13 pacientes que fueron seleccionados previamente con cancer colorectal, con analisis histológico confirmados y sin tratar. En estos 13 pacientes se obtuvieron muestras de cancer y tejido normal de colon. El tejido de las muestras (normales y tumorales) se extrajo mediante cirujía y se congeló en nitrógeno líquido. El RNA de las muestras fue extraído para poder ser procesado e hibridado mediante microarray (se utilizó la plataforma Affymetrix HG-U133plus2). La calidad del RNA aislado fue evaluado fotométricamente usando un radio 260/280 en gel de agarosa. Todos los estudios fueron aprovados con el comité ético de la Universidad de Heidelberg.
+
+Para el análisis de expresión génica se ha utilizado el software R (R versions 3.6.1/Bioconductor software).
+
+
+##### Workflow:
+
+El código completo para replicar este análisis se puede descargar en el repositorio de github creados para desarrollar específicamente esta prueba. La URL es: https://github.com/apliego94
+
+Paquetes para la ejecución.
+
+```{r installBioC, message=FALSE, warning=FALSE, eval=FALSE}
+#if (!requireNamespace("BiocManager", quietly = TRUE))
+#    install.packages("BiocManager")
+#BiocManager::install()
+```
+The second chunk installs packages specifically needed for this study.Some packages may require compilation, so a good idea if you are not working on a linux machine, is to have `Rtools` installed. This can be downladed from [https://cran.r-project.org/bin/windows/Rtools/](https://cran.r-project.org/bin/windows/Rtools/).
+
+```{r installPackages, message=FALSE, warning=FALSE, eval=FALSE}
+#install.packages("knitr")
+#install.packages("colorspace")
+#install.packages("gplots")
+#install.packages("ggplot2")
+#install.packages("ggrepel")
+#install.packages("htmlTable")
+#install.packages("prettydoc")
+#install.packages("devtools")
+#install.packages("BiocManager")
+#BiocManager::install("oligo")
+#BiocManager::install("pd.mogene.2.1.st")
+#BiocManager::install("arrayQualityMetrics")
+#BiocManager::install("pvca")
+# NOT NEEDED UNTIL ANALYSES ARE PERFORMED
+#BiocManager::install("limma")
+#BiocManager::install("genefilter")
+#BiocManager::install("mogene21sttranscriptcluster.db")
+#BiocManager::install("annotate")
+#BiocManager::install("org.Mm.eg.db")
+#BiocManager::install("ReactomePA")
+#BiocManager::install("reactome.db")
+```
+
+```{r cars}
+#if(!(require(printr))) {
+#  install.packages(
+#    'printr',
+#    type = 'source',
+#    repos = c('http://yihui.name/xran', 'http://cran.rstudio.com')
+#  )
+#}
+```
+
+
+```{r}
+setwd("/Users/aliciapliego2/affymetrix/ColorectalCancer/data")
+```
+
+1. Identificar los diferentes grupos del análisis. En la siguiente tabla podemos ver los diferentes grupos que tiene este análisis:
+  -El grupo normal corresponde al tejido sano derivado de colon de cada paciente, mientras que el grupo Cancer corresponde a tejido derivado de cancer de colon.
+
+```{r ReadTargets}
+targets <- read.csv2("/Users/aliciapliego2/affymetrix/ColorectalCancer/data/targetsNew.csv", header = TRUE, sep = ";") 
+knitr::kable(
+  targets, booktabs = TRUE,
+  caption = 'Content of the targets file used for the current analysis')
+```
+Leer los raw data (CEL files)
+```{r ReadCELfiles, message=FALSE, results='hide', warning=FALSE}
+library(oligo)
+celFiles <- list.celfiles("/Users/aliciapliego2/affymetrix/ColorectalCancer/data", full.names = TRUE)
+library(Biobase)
+my.targets <-read.AnnotatedDataFrame(file.path("/Users/aliciapliego2/affymetrix/ColorectalCancer/data/targetsNew.csv"), 
+                                     header = TRUE, row.names = 1, 
+                                     sep=";") 
+rawData <- read.celfiles(celFiles, phenoData = my.targets)
+```
+```{r ,results='hide', warning=FALSE}
+summary(rawData)
+```
+
+
+```{r ChangeName,results='hide', warning=FALSE}
+my.targets@data$ShortName->rownames(pData(rawData))
+colnames(rawData) <-rownames(pData(rawData)) 
+
+head(rawData)
+```
+
+Principal component analysis de los datos antes de la normalización:
+
+```{r, warning=FALSE}
+library(ggplot2)
+library(ggrepel)
+plotPCA3 <- function (datos, labels, factor, title, scale,colores, size = 1.5, glineas = 0.25) {
+  data <- prcomp(t(datos),scale=scale)
+  # plot adjustments
+  dataDf <- data.frame(data$x)
+  Group <- factor
+  loads <- round(data$sdev^2/sum(data$sdev^2)*100,1)
+  # main plot
+  p1 <- ggplot(dataDf,aes(x=PC1, y=PC2)) +
+    theme_classic() +
+    geom_hline(yintercept = 0, color = "gray70") +
+    geom_vline(xintercept = 0, color = "gray70") +
+    geom_point(aes(color = Group), alpha = 0.55, size = 3) +
+    coord_cartesian(xlim = c(min(data$x[,1])-5,max(data$x[,1])+5)) +
+    scale_fill_discrete(name = "Group")
+  # avoiding labels superposition
+  p1 + geom_text_repel(aes(y = PC2 + 0.25, label = labels),segment.size = 0.25, size = size) + 
+    labs(x = c(paste("PC1",loads[1],"%")),y=c(paste("PC2",loads[2],"%"))) +  
+    ggtitle(paste("Principal Component Analysis for: ",title,sep=" "))+ 
+    theme(plot.title = element_text(hjust = 0.5)) +
+    scale_color_manual(values=colores)
+  }
+```
+
+
+```{r PCARaw, message=FALSE, fig.cap="Visualization of the two first Principal Components for raw data"}
+plotPCA3(exprs(rawData), labels = targets$SampleTitle, factor = targets$Disease, 
+         title="Raw data", scale = FALSE, size = 3, 
+         colores = c("red", "blue", "green", "yellow"))
+```
+
+El primer componente del PCA contiene un 36.1% de la variabilidad total de las muestras, esta variabilidad puede deberse a muchos motivos, en este caso, no se da en función de si la muestra deriva de cancer o no, puede deberse a que no todas las muestras derivan del mismo lugar exacto del colon, unas derivan del coecum, otras del rectosigmoid, otras del colon ascendente, del sigmoid, left colic flexure, right colic flexure o del recto.
+
+También podemos visualizar los mismos datos usando barplots.
+
+```{r BoxplotRaw, message=FALSE, fig.cap="Boxplot for arrays intensities (Raw Data)"}
+boxplot(rawData, cex.axis=0.5, las=2,  which="all", 
+         col = c(rep("red", 3), rep("blue", 3), rep("green", 3), rep("yellow", 3)),
+         main="Distribution of raw intensity values")
+```
+Hay una pequeña variación de los datos, que es esperada en los datos crudos.
+
+## Data normalization
+
+
+Es necesario normalizar los datos para poder comparalos entre ellos, para ello se utiliza la siguiente funcion:
+
+```{r Normalization}
+eset_rma <- rma(rawData)
+```
+
+###Control de calidad de los datos normalizados:
+
+PCA de los datos normalizados:
+
+```{r fig:PCANorm, message=FALSE, fig.cap="Visualization of first two principal components for normalized data"}
+plotPCA3(exprs(eset_rma), labels = targets$SampleTitle, factor = targets$Disease, 
+         title="Normalized data", scale = FALSE, size = 3, 
+         colores = c("red", "blue", "green", "yellow"))
+```
+Como podemos observar, ahora la variabilidad del primer PCA es del 37.8% y esta variabilidad se debe principalmente a si los datos corresponden a cancer o normales, menos en el caso del espcimen 9 que está intercambiado. 
+
+Visualizamos los datos con boxplots:
+```{r BoxplotNorm, message=FALSE, fig.cap="Distribution of  intensities for normalized data"}
+boxplot(eset_rma, cex.axis=0.5, las=2,  which="all", 
+         col = c(rep("red", 3), rep("blue", 3), rep("green", 3), rep("yellow", 3)),
+         main="Boxplot for arrays intensity: Normalized Data")
+```
+Como podemos ver ahora todos los datos están alineados.
+
+
+
+
+##Differentially expressed genes
+
+Seleccion de genes diferencialmente expresados. Si un gen está diferencialmente expresado se espera que haya una cierta diferencia entre los diferentes grupos y por eso, la varianza del gen será mayor que la de los que no lo estén.
+
+
+```{r SDplot, fig.cap="Values of standard deviations allong all samples for all genes ordered from smallest to biggest"}
+sds <- apply (exprs(eset_rma), 1, sd)
+sdsO<- sort(sds)
+plot(1:length(sdsO), sdsO, main="Distribution of variability for all genes",
+     sub="Vertical lines represent 90% and 95% percentiles",
+     xlab="Gene index (from least to most variable)", ylab="Standard deviation")
+abline(v=length(sds)*c(0.9,0.95))
+```
+
+
+## Filtering least variable genes
+
+Es necesario eliminar los genes cuya variabilidad se atribuya a variaciones aleatorias, esto es útil para poder reducir el numero de tests que se tienen que realizar.
+
+```{r,results='hide', warning=FALSE}
+#if (!requireNamespace("BiocManager", quietly = TRUE))
+#    install.packages("BiocManager")
+
+#BiocManager::install("hthgu133a.db")
+```
+Se utiliza la función nFilter y es importante importar el paquete específico para las anotaciones del microarray específico. En este caso hthgu133a.db.
+
+```{r}
+library(genefilter)
+
+library(hthgu133a.db)
+annotation(eset_rma) <- "hthgu133a.db"
+filtered <- nsFilter(eset_rma, 
+                     require.entrez = TRUE, remove.dupEntrez = TRUE,
+                     var.filter=TRUE, var.func=IQR, var.cutoff=0.75, 
+                     filterByQuantile=TRUE, feature.exclude = "^AFFX")
+
+```
+
+
+```{r FilterResults2}
+print(filtered$filter.log)
+eset_filtered <-filtered$eset
+```
+
+Guardamos los datos en la carpeta de resultados.
+
+```{r SaveData1, results='hide', message=FALSE}
+write.csv(exprs(eset_rma), file="/Users/aliciapliego2/affymetrix/ColorectalCancer/results/normalized.Data.csv")
+write.csv(exprs(eset_filtered), file="/Users/aliciapliego2/affymetrix/ColorectalCancer/results/normalized.Filtered.Data.csv")
+save(eset_rma, eset_filtered, file="/Users/aliciapliego2/affymetrix/ColorectalCancer/results/normalized.Data.Rda")
+```
+
+
+## Defining the experimental setup: The design matrix
+
+Se ha utilizado en este protocolo un análisis lineal que crea una  __design matrix__. Que básicamente es una tabla que describe la localización de cada muestra en un grupo o condición experimental. Tiene tantas files como muestras y tantas columnas como grupos. Cada fila contiene un uno en una columna del grupo al que la muestra corresponde y un cero en las otras. En este caso se han establecido dos condiciones experimentales, si la muestra es de cáncer o es normal y si es de metástasis o no.
+
+
+```{r LoadSavedData, results='hide', message=FALSE}
+if (!exists("eset_filtered")) load (file="/Users/aliciapliego2/affymetrix/ColorectalCancer/results/normalized.Data.Rda")
+```
+
+
+```{r DesignMatrix, message=FALSE, results='hide', message=FALSE}
+library(limma)
+designMat<- model.matrix(~0+Group, pData(eset_filtered))
+colnames(designMat) <- c( "Cancer", "CancerMe", "Normal")
+print(designMat)
+
+```
+
+En este ejemplo se quiere comparar la diferencia entre los genes que son de muestras cancerígenas de cancer de colon y normales, y también de las que vienen de colon con las que tienen metástasis. 
+
+
+```{r setContrasts, results='hide', message=FALSE}
+cont.matrix <- makeContrasts (DiseasevsHealthy = Cancer-Normal,
+                              CancerMetastasis = (Cancer-Normal)-CancerMe,
+                              levels=designMat)
+print(cont.matrix)
+```
+## Model estimation and gene selection
+
+Una vez que se ha establecido la matriz de contraste, podemos proceder a estimar el modelo, estimar el contraste y realizar los tests de significancia que nos llevarán a la decisión, para cada gen y para cada comparación, si pueden ser considerados diferencialmente expresados, para ello se utilizará el paquete limma.
+
+
+```{r, linearmodelfit, results='hide', message=FALSE}
+library(limma)
+fit<-lmFit(eset_filtered, designMat)
+fit.main<-contrasts.fit(fit, cont.matrix)
+fit.main<-eBayes(fit.main)
+class(fit.main)
+```
+## Obtaining lists of differentially expressed genes
+
+Para ver la lista de los genes diferencialmente expresados podemos mirar la tabla.
+
+Para la comparación 1 (muestras de cancer vs normal):
+```{r, topTabs1, results='hide', message=FALSE}
+topTab_DiseasevsHealthy <- topTable (fit.main, number=nrow(fit.main), coef="DiseasevsHealthy", adjust="fdr") 
+head(topTab_DiseasevsHealthy)
+```
+
+Para la comparación 1 (muestras de cancer vs metastasis):
+```{r, results='hide', message=FALSE}
+topTab_CancerMetastasis <- topTable (fit.main, number=nrow(fit.main), coef="CancerMetastasis", adjust="fdr") 
+head(topTab_CancerMetastasis)
+```
+
+La primera columna contiene el ID para cada muestra del fabricante (Affymetrix). El siguiente paso es anotar (qué gen corresponde al ID de Affymetrix).
+
+## Gene Annotation
+
+Es importante anotar los genes y dependiendo del tipo de array, podemos añadir Gene Symbol, identificador Gene Entrez o  la descripción del gen.
+
+
+```{r GeneAnnotation, message=FALSE, warning=FALSE, results='hide'}
+annotatedTopTable <- function(topTab, anotPackage)
+{
+  topTab <- cbind(PROBEID=rownames(topTab), topTab)
+  myProbes <- rownames(topTab)
+  thePackage <- eval(parse(text = anotPackage))
+  geneAnots <- select(thePackage, myProbes, c("SYMBOL", "ENTREZID", "GENENAME"))
+  annotatedTopTab<- merge(x=geneAnots, y=topTab, by.x="PROBEID", by.y="PROBEID")
+return(annotatedTopTab)
+}
+```
+
+
+```{r annotateTopTables, results='hide', message=FALSE}
+topAnnotated_DiseasevsHealthy <- annotatedTopTable(topTab_DiseasevsHealthy,
+anotPackage="hthgu133a.db")
+write.csv(topAnnotated_DiseasevsHealthy, file="/Users/aliciapliego2/affymetrix/ColorectalCancer/results/topAnnotated_DiseasevsHealthy.csv")
+
+topAnnotated_CancerMetastasis <- annotatedTopTable(topTab_CancerMetastasis,
+anotPackage="hthgu133a.db")
+write.csv(topAnnotated_CancerMetastasis, file="/Users/aliciapliego2/affymetrix/ColorectalCancer/results/topAnnotated_CancerMetastasis.csv")
+```
+Annotation makes the tables more comprehensible. Table \@ref(tab:annotatedTop) shows the annotations added to results "topTable" for the comparison "KOvsWT.COLD" (only the first four columns are shown).
+
+
+```{r annotatedTop, echo=FALSE, }
+short<- head(topAnnotated_DiseasevsHealthy[1:5,1:4])
+# library(kableExtra)
+# knitr::kable(
+#   short, booktabs = TRUE,
+#   caption = 'Annotations added to results "topTable" for the comparison "KOvsWT.COLD"'
+# )
+show(short)
+```
+```{r annotatedTop, echo=FALSE}
+short<- head(topAnnotated_CancerMetastasis[1:5,1:4])
+# library(kableExtra)
+# knitr::kable(
+#   short, booktabs = TRUE,
+#   caption = 'Annotations added to results "topTable" for the comparison "KOvsWT.COLD"'
+# )
+show(short)
+```
+## Visualizing differential expression
+
+Podemos visualizar la diferencia de expresión total con volcano plots. Estas gráficas representan en el eje X los cambios de expresión en escala logarítmica (efecto biológico) y en el eje Y el logaritmo negativo  del valor p (efecto estadístico).
+
+```{r volcanoPlot, fig.cap="Volcano plot for the comparison between KO and WT in COLD temperature. The names of the top 4 genes (i.e. the first four genes in the topTable) are shown in the plot"}
+library(hthgu133a.db)
+geneSymbols <- select(hthgu133a.db, rownames(fit.main), c("SYMBOL"))
+SYMBOLS<- geneSymbols$SYMBOL
+volcanoplot(fit.main, coef=1, highlight=4, names=SYMBOLS, 
+            main=paste("Differentially expressed genes", colnames(cont.matrix)[1], sep="\n"))
+  abline(v=c(-1,1))
+```
+
+```{r saveVolcanos, echo=FALSE, results='hide'}
+pdf("/Users/aliciapliego2/affymetrix/ColorectalCancer/figures/Volcanos.pdf")
+for (i in colnames(cont.matrix)){
+  volcanoplot(fit.main, coef=i, highlight=4, names=SYMBOLS,
+              main=paste("Differentially expressed genes",i, sep="\n"))
+  abline(v=c(-1,1))
+}
+dev.off()
+```
+
+## Multiple Comparisons
+
+Para realizar comparaciones múltiples,se utilizará el paquete limma y el diagrama Venn.
+
+```{r decideTests.1, results='hide', message=FALSE}
+library(limma)
+res<-decideTests(fit.main, method="separate", adjust.method="fdr", p.value=0.1, lfc=1)
+```
+
+
+```{r resumeDecideTests}
+sum.res.rows<-apply(abs(res),1,sum)
+res.selected<-res[sum.res.rows!=0,] 
+print(summary(res))
+```
+
+Visualización en diagrama Venn. Nos muestra cuántos genes son compartidos por una o más selecciones.
+
+```{r, vennDiagram, fig.cap="Venn diagram showing the genes in common between the three comparisons performed"}
+vennDiagram (res.selected[,1:2], cex=0.9)
+title("Genes in common between the three comparisons\n Genes selected with FDR < 0.1 and logFC > 1")
+```
+
+
+
+## Heatmaps
+
+El heatmap nos permite visualizar los genes que has sido seleccionados como diferencialmente expresados. Estos gráficos usan gradientes de colores para positivo (gen upregalated) o negativo (gen downregulated).
+
+
+```{r data4Heatmap, results='hide', message=FALSE}
+probesInHeatmap <- rownames(res.selected)
+HMdata <- exprs(eset_filtered)[rownames(exprs(eset_filtered)) %in% probesInHeatmap,]
+
+geneSymbols <- select(hthgu133a.db, rownames(HMdata), c("SYMBOL"))
+SYMBOLS<- geneSymbols$SYMBOL
+rownames(HMdata) <- SYMBOLS
+write.csv(HMdata, file = file.path("/Users/aliciapliego2/affymetrix/ColorectalCancer/results/data4Heatmap.csv"))
+```
+
+Se pueden agrupar los genes en el heatmap para facilitar la interpretación:
+
+```{r heatmapNoclustering, fig.cap="Heatmap for expression data without any grouping"}
+my_palette <- colorRampPalette(c("blue", "red"))(n = 299)
+library(gplots)
+
+heatmap.2(HMdata,
+          Rowv = FALSE,
+          Colv = FALSE,
+          main = "Differentially expressed genes \n FDR < 0,1, logFC >=1",
+          scale = "row",
+          col = my_palette,
+          sepcolor = "white",
+          sepwidth = c(0.05,0.05),
+          cexRow = 0.5,
+          cexCol = 0.9,
+          key = TRUE,
+          keysize = 1.5,
+          density.info = "histogram",
+          ColSideColors,
+          tracecol = NULL,
+          dendrogram = "none",
+          srtCol = 30)
+```
+
+
+
+```{r heatmapClustering, fig.cap="Heatmap for expression data grouping genes (rows) and samples (columns) by their similarity"}
+heatmap.2(HMdata,
+          Rowv = TRUE,
+          Colv = TRUE,
+          dendrogram = "both",
+          main = "Differentially expressed genes \n FDR < 0,1, logFC >=1",
+          scale = "row",
+          col = my_palette,
+          sepcolor = "white",
+          sepwidth = c(0.05,0.05),
+          cexRow = 0.5,
+          cexCol = 0.9,
+          key = TRUE,
+          keysize = 1.5,
+          density.info = "histogram",
+          tracecol = NULL,
+          srtCol = 30)
+
+```
+
+
+## Biological Significance of results
+
+Una vez se ha obtenido una lista de genes que caracterizan las diferencias entre dos condiciones que han de ser interpretadas. Se procede a realizar un análisis para ayudar en la interpretación de los datos.
+Para este análisis se utilizará el paquete de Bioconductor clusterProfiler.
+
+Pero primero se preparan las listas de genes que serán analizados:
+
+```{r selectGenes, results='hide', message=FALSE}
+listOfTables <- list(CancerMetastasis = topTab_CancerMetastasis, 
+                     DiseasevsHealthy  = topTab_DiseasevsHealthy)
+listOfSelected <- list()
+
+```
+
+```{r, results='hide', message=FALSE}
+for (i in 1:length(listOfTables)){
+  # select the toptable
+  topTab <- listOfTables[[i]]
+  # select the genes to be included in the analysis
+  whichGenes<-topTab["adj.P.Val"]<0.15
+  selectedIDs <- rownames(topTab)[whichGenes]
+  # convert the ID to Entrez
+  EntrezIDs<- select(hthgu133a.db, selectedIDs, c("ENTREZID"))
+  EntrezIDs <- EntrezIDs$ENTREZID
+  listOfSelected[[i]] <- EntrezIDs
+  names(listOfSelected)[i] <- names(listOfTables)[i]
+}
+sapply(listOfSelected, length)
+```
+
+Este análisis también requiere tener los identificadores de Entrez para todos los genes analizados.
+
+```{r, results='hide', message=FALSE}
+mapped_genes2GO <- mappedkeys(org.Mm.egGO)
+mapped_genes2KEGG <- mappedkeys(org.Mm.egPATH)
+mapped_genes <- union(mapped_genes2GO , mapped_genes2KEGG)
+```
+
+Importamos el paquete clusterProfiler:
+
+Luo et al. (2013) Pathview: an R/Bioconductor package for pathway-based data integration and visualization. Bioinformatics (Oxford, England), 29:14 1830–1831, 2013. ISSN 1367-4803 http://
+bioinformatics.oxfordjournals.org/content/abstract/29/14/1830.abstract PMID: 23740750
+
+```{r, results='hide', message=FALSE}
+#if (!requireNamespace("BiocManager", quietly = TRUE))
+#    install.packages("BiocManager")
+
+#BiocManager::install("clusterProfiler")
+```
+```{r, results='hide', message=FALSE}
+genesIn1 <- listOfSelected[[1]]
+genesIn2 <- listOfSelected[[2]]
+```
+
+
+```{r}
+library(clusterProfiler)
+
+enrichment <-enrichGO(genesIn1, OrgDb=hthgu133a.db, pvalueCutoff=1, qvalueCutoff=1)
+
+head(summary(enrichment))
+
+```
+```{r, results='hide', message=FALSE}
+pdf(file=paste0("/Users/aliciapliego2/affymetrix/ColorectalCancer/results/","ReactomePABarplot.",comparison,".pdf"))
+    print(barplot(enrichment, showCategory = 15, font.size = 4, 
+            title = paste0("Reactome Pathway Analysis for ", comparison,". Barplot")))
+  dev.off()
+```
+```{r, results='hide', message=FALSE}
+ pdf(file = paste0("/Users/aliciapliego2/affymetrix/ColorectalCancer/results/","ReactomePAcnetplot.",comparison,".pdf"))
+    print(cnetplot(enrichment, categorySize = "geneNum", schowCategory = 15, 
+         vertex.label.cex = 0.75))
+  dev.off()
+```
+
+
+```{r}
+library(clusterProfiler)
+
+enrichment2 <-enrichGO(genesIn2, OrgDb=hthgu133a.db, pvalueCutoff=1, qvalueCutoff=1)
+
+head(summary(enrichment))
+
+```
+Aquí finalmente podemos ver los genes que están diferencialmente expresados con su Go term y descripción.
+```{r, results='hide', message=FALSE}
+pdf(file=paste0("/Users/aliciapliego2/affymetrix/ColorectalCancer/results/","ReactomePABarplot2.",comparison,".pdf"))
+    print(barplot(enrichment2, showCategory = 15, font.size = 4, 
+            title = paste0("Reactome Pathway Analysis for ", comparison,". Barplot")))
+  dev.off()
+```
+
+```{r, results='hide', message=FALSE}
+ pdf(file = paste0("/Users/aliciapliego2/affymetrix/ColorectalCancer/results/","ReactomePAcnetplot.",comparison,".pdf"))
+    print(cnetplot(enrichment2, categorySize = "geneNum", schowCategory = 15, 
+         vertex.label.cex = 0.75))
+  dev.off()
+```
+
+
+
+## Summary of results
+
+Una vez que se han procesado todos los datos, podemos visualizar los archivos generados, que también pueden ser encontrados en el repositorio de Github proporcionado al comienzo de este documento:
+
+```{r listOfFiles, echo=FALSE}
+listOfFiles <- dir("/Users/aliciapliego2/affymetrix/ColorectalCancer/results/") 
+knitr::kable(
+  listOfFiles, booktabs = TRUE,
+  caption = 'List of files generated in the analysis',
+  col.names="List_of_Files"
+)
+```
+
+##Resultados:
+
+De los datos obtenidos, la expresión genética diferencial entre el tejido tumoral y el tejido normal, nos da unos resultados de 3100 genes diferencialemtne expresados, de los que 390 están desregulados, y 337 están upregulated. Entre estos genes cuya expresión es mayor que en el tejido normal se encuentran diferentes citoquinas como CXCL3, CXCL1, CXCL2, que se ha demostrado que juegan un papel importante en el cancer, y cadherinas como CDH3. Entre los genes cuya expresión está disminuida, se encuentran SLC26A2, AQP8, CLCA4, CA1, CA4. El analisis de enriquecimiento me ha permitido también ver cuales son las funciones biológicas de los genes diferencialmente expresados, como podemos ver el los gráficos de barras generado, los genes con mayor expresión se corresponden a los grupos de cell adhesion bindin, cadherin binding, DNA-binding, cell cycle.
+
+Además, en los casos de metástasis los genesque están másexpresados también se corresponden con cadherin genes y cell adhesion molecule binding genes.
+
+
+#Discusión:
+
+Los pasos que siguen las células tumorales para progresar a metástasis,usualmente pasan desde una perdida de los contactos entre las propias células mediante un procesamiento proteolítico y un cambio de clase de cadherinas (de E a N), posteriormente invaden la membrana basal y la matriz extracelular mediante degradación proteolítica y atracción de chemoquinas, despues pasan a la sangre o a los vasos linfáticos mediante degradación proteolítica y transición de epitelio a mesenquima. Como he mencionado, el primer paso es poder romper los contactos entre las celulas adyacentes a las células tumorales para poder migrar y disperarse y así 'ir conquistando nuevas capas de tejido' hasta poder escapar a traves de la sangre o la linfa y poder establecerse en otros órganos. Por esto, la sobre expresión de genes pertenecientes a la familia de cell-adhesion binding sugiere que esta familia de genes juega un papel importante, no solo en el cancer, sino en la progresión de cancer a metástasis, pues en ambos casos se encuentra altamente expresada. Así mismo, la familia de cadherinas son un tipo de moleculas de adhesión. Nuestro estudio sugiere que esta familia de proteins también juega un papel importante tanto en el cancer como en su progresión a metástasis, ya que se encuentran altamente reguladas, lo que puede significar que las células tumorales sobreexpresan entos genes para poder crear sus propias adhesiones entre ellas y poder generar su propia matriz de adhesión. Además los genes que participan en la regulación del ciclo celular, también se encuentran diferencialmente expresados. Ya hay numeros estudios que han demostrados que la desregulacion de genes que regulan el ciclo celular como las ciclinas juegan un papel importante en el cancer, por lo que en este estudio podemos corroborar que en las muestras de cancer hay una sobreexpresión de estos genes, en comparación con los grupos control.
+
+  
